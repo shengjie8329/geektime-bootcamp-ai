@@ -249,3 +249,7 @@ based on @w3/extracted/system-prompts.json and @w3/extracted/tool-definitions.js
 
 1. 如果里面只有一个 pdf 文件，那么使用 pdf2jpg（不存在则使用 cargo install swiss-knife）把 pdf 转换成一系列 001.jpg, 002.jpg, ...。然后按照 2 处理。
 2. 如果里面有一系列 image 文件，则按照已有的 slides 的生成方式生成 ./src/pages/presentations/<slide-name>.mdx，然后更新 ./src/pages/presentations/index.astro。
+
+## 生成 vogels-keynote-nblm slide
+
+帮我使用 vogels-keynote-nblm 生成一个新的 site slides

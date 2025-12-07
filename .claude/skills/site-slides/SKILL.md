@@ -146,3 +146,22 @@ User: "Create slides from the `vogels-keynote` directory"
 - Generate meaningful alt text and captions based on image content
 - Use today's date for the `date` field in index.astro
 - Image paths in the MDX should be absolute paths starting with `/slides/`
+
+## Important: Avoiding MDX Syntax Errors
+
+When generating captions and alt text, **NEVER use Chinese quotation marks** (`"` and `"`) inside JSX string attributes. These characters cause MDX parsing errors.
+
+**Bad example:**
+```jsx
+caption: "真正的问题不是"AI会取代我吗？"而是..."
+```
+
+**Good example (use 「」 instead):**
+```jsx
+caption: "真正的问题不是「AI会取代我吗？」而是..."
+```
+
+Also avoid:
+- Unescaped special characters in strings
+- Line breaks within caption strings
+- Using backticks or other quote characters that might conflict with JSX syntax
