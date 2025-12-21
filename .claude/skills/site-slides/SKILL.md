@@ -47,16 +47,17 @@ If directory contains only a PDF file:
 
 3. Convert PDF to JPG images:
    ```bash
-   cd ./site/public/slides/<directory-name>
-   pdf2jpg <filename>.pdf
+   cd ./site/public/slides/<directory-name> && pdf2jpg <filename>.pdf
    ```
 
-   This generates `001.jpg`, `002.jpg`, etc.
+   This generates `001.jpg`, `002.jpg`, etc. in the current directory.
 
-4. Delete the original PDF file after successful conversion:
+4. Delete the original PDF file after successful conversion (if it still exists).
+   Since we're still in the slides directory, use the filename directly:
    ```bash
-   rm ./site/public/slides/<directory-name>/<filename>.pdf
+   rm -f <filename>.pdf
    ```
+   Note: Use `-f` flag in case `pdf2jpg` already deleted the file.
 
 5. Proceed to Step 4.
 
