@@ -29,6 +29,7 @@ import { MetadataTree } from "../components/MetadataTree";
 import { SqlEditor } from "../components/SqlEditor";
 import { DatabaseSidebar } from "../components/DatabaseSidebar";
 import { NaturalLanguageInput } from "../components/NaturalLanguageInput";
+import * as XLSX from "xlsx";
 
 const { Title, Text } = Typography;
 
@@ -219,6 +220,144 @@ export const Home: React.FC = () => {
     link.click();
     URL.revokeObjectURL(link.href);
     message.success(`Exported ${queryResult.rowCount} rows to JSON`);
+  };
+
+  // Excel Export Handler
+  const handleExportExcel = () => {
+    if (!queryResult || queryResult.rows.length === 0) {
+      message.warning("No data to export");
+      return;
+    }
+
+    // Warn if result is large
+    if (queryResult.rows.length > 10000) {
+      Modal.confirm({
+        title: "Large Dataset Warning",
+        icon: <ExclamationCircleOutlined />,
+        content: `You are about to export ${queryResult.rowCount.toLocaleString()} rows. This may take a while and consume memory. Continue?`,
+        onOk: () => exportToExcel(),
+      });
+    } else {
+      exportToExcel();
+    }
+  };
+
+  const exportToExcel = () => {
+    if (!queryResult) return;
+
+    // Prepare data with headers as first row
+    const headers = queryResult.columns.map((col) => col.name);
+    const worksheetData = [headers, ...queryResult.rows.map((row) =>
+      headers.map((header) => row[header])
+    )];
+
+    // Create worksheet
+    const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+
+    // Set column widths for better readability
+    const columnWidths = headers.map((header) => ({
+      wch: Math.max(header.length, 15), // Min width 15 chars
+    }));
+    worksheet["!cols"] = columnWidths;
+
+    // Create workbook
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Query Results");
+
+    // Generate file and trigger download
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
+    const filename = `${selectedDatabase}_${timestamp}.xlsx`;
+
+    XLSX.writeFile(workbook, filename);
+
+    message.success(`Exported ${queryResult.rowCount} rows to Excel`);
+  };
+
+  // SQL INSERT Export Handler
+  const handleExportSQL = () => {
+    if (!queryResult || queryResult.rows.length === 0) {
+      message.warning("No data to export");
+      return;
+    }
+
+    // Warn if result is large (SQL can be very large)
+    if (queryResult.rows.length > 5000) {
+      Modal.confirm({
+        title: "Large Dataset Warning",
+        icon: <ExclamationCircleOutlined />,
+        content: `You are about to export ${queryResult.rowCount.toLocaleString()} rows as SQL INSERT statements. This may generate a very large file. Continue?`,
+        onOk: () => exportToSQL(),
+      });
+    } else {
+      exportToSQL();
+    }
+  };
+
+  const exportToSQL = () => {
+    if (!queryResult) return;
+
+    // Extract table name from SQL or use a default
+    const tableNameMatch = queryResult.sql.match(/FROM\s+([^\s,]+)/i);
+    const tableName = tableNameMatch
+      ? tableNameMatch[1].replace(/["`]/g, "") // Remove quotes if present
+      : "query_results";
+
+    // Generate INSERT statements
+    const sqlStatements: string[] = [];
+
+    // Add a header comment
+    sqlStatements.push(`-- Exported from database: ${selectedDatabase}`);
+    sqlStatements.push(`-- Original query: ${queryResult.sql}`);
+    sqlStatements.push(`-- Exported at: ${new Date().toISOString()}`);
+    sqlStatements.push("");
+
+    // Generate INSERT statement for each row
+    queryResult.rows.forEach((row) => {
+      const columns = queryResult.columns.map((col) => col.name);
+      const values = columns.map((col) => {
+        const value = row[col];
+
+        // Handle null/undefined
+        if (value === null || value === undefined) {
+          return "NULL";
+        }
+
+        // Handle numbers
+        if (typeof value === "number") {
+          return value.toString();
+        }
+
+        // Handle booleans
+        if (typeof value === "boolean") {
+          return value ? "TRUE" : "FALSE";
+        }
+
+        // Handle dates (ISO string format)
+        if (value instanceof Date || !isNaN(Date.parse(value))) {
+          return `'${new Date(value).toISOString().replace("T", " ").slice(0, 19)}'`;
+        }
+
+        // Handle strings - escape single quotes
+        const stringValue = String(value);
+        return `'${stringValue.replace(/'/g, "''")}'`;
+      });
+
+      const columnList = columns.join(", ");
+      const valueList = values.join(", ");
+
+      sqlStatements.push(`INSERT INTO ${tableName} (${columnList}) VALUES (${valueList});`);
+    });
+
+    const sqlContent = sqlStatements.join("\n");
+    const blob = new Blob([sqlContent], { type: "text/plain;charset=utf-8;" });
+    const link = document.createElement("a");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
+    link.href = URL.createObjectURL(blob);
+    link.download = `${selectedDatabase}_${tableName}_${timestamp}.sql`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+
+    message.success(`Exported ${queryResult.rowCount} rows to SQL INSERT script`);
   };
 
   const tableColumns =
@@ -637,6 +776,20 @@ export const Home: React.FC = () => {
                   style={{ fontSize: 12, fontWeight: 700 }}
                 >
                   EXPORT JSON
+                </Button>
+                <Button
+                  size="small"
+                  onClick={handleExportExcel}
+                  style={{ fontSize: 12, fontWeight: 700 }}
+                >
+                  EXPORT EXCEL
+                </Button>
+                <Button
+                  size="small"
+                  onClick={handleExportSQL}
+                  style={{ fontSize: 12, fontWeight: 700 }}
+                >
+                  EXPORT SQL
                 </Button>
               </Space>
             }
