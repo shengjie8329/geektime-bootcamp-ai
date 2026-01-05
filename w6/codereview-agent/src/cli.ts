@@ -50,6 +50,8 @@ let currentToolDisplay = ""
 function formatToolCall(name: string, args: unknown): string {
   const argsObj = args as Record<string, unknown>
   switch (name) {
+    case "bash":
+      return `bash ${argsObj.command ?? ""}`
     case "git":
       return `git ${argsObj.command ?? ""}`
     case "gh":
@@ -61,6 +63,29 @@ function formatToolCall(name: string, args: unknown): string {
     default:
       return name
   }
+}
+
+// Format tool result for display (truncated preview)
+function formatResultPreview(result: string, maxLines = 8): string {
+  const lines = result.trim().split("\n")
+  const previewLines = lines.slice(0, maxLines)
+  const truncated = lines.length > maxLines
+
+  // Truncate long lines
+  const formattedLines = previewLines.map((line) => {
+    if (line.length > 100) {
+      return line.slice(0, 100) + "..."
+    }
+    return line
+  })
+
+  let output = formattedLines.map((line) => `  ${pc.dim("│")} ${pc.dim(line)}`).join("\n")
+
+  if (truncated) {
+    output += `\n  ${pc.dim("│")} ${pc.dim(`... (${lines.length - maxLines} more lines)`)}`
+  }
+
+  return output
 }
 
 // Event handler for streaming output
@@ -84,13 +109,21 @@ function handleEvent(event: AgentEvent): void {
 
     case "tool_result":
       if (spinner) {
-        if (event.isError) {
-          spinner.fail(pc.red(currentToolDisplay))
-          console.log(pc.dim(`  ${event.result.split("\n")[0]}`))
-        } else {
-          spinner.succeed(pc.dim(currentToolDisplay))
-        }
+        // Stop spinner first, then print status and result manually
+        spinner.stop()
         spinner = null
+
+        if (event.isError) {
+          console.log(`${pc.red("✖")} ${pc.red(currentToolDisplay)}`)
+          // Show error message
+          console.log(formatResultPreview(event.result, 3))
+        } else {
+          console.log(`${pc.green("✔")} ${pc.dim(currentToolDisplay)}`)
+          // Show result preview for successful calls
+          if (event.result && event.result.trim()) {
+            console.log(formatResultPreview(event.result))
+          }
+        }
       }
       break
 

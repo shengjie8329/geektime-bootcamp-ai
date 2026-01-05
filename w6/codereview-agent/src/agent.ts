@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { type AgentEvent, createAgent, type Tool } from "simple-agent"
-import { ghTool, gitTool, readFileTool, writeFileTool } from "./tools/index.ts"
+import {
+  bashTool,
+  ghTool,
+  gitTool,
+  readFileTool,
+  writeFileTool,
+} from "./tools/index.ts"
 
 // Load system prompt from file
 const systemPrompt = readFileSync(
@@ -25,7 +31,7 @@ export interface CodeReviewAgentOptions {
  *
  * The agent is configured with:
  * - A comprehensive system prompt for code review
- * - Four built-in tools: read_file, write_file, git, gh
+ * - Five built-in tools: bash, read_file, write_file, git, gh
  * - Sensible defaults for model and max steps
  *
  * @example
@@ -44,6 +50,7 @@ export interface CodeReviewAgentOptions {
  */
 export function createCodeReviewAgent(options: CodeReviewAgentOptions = {}) {
   const tools: Tool[] = [
+    bashTool as Tool,
     readFileTool as Tool,
     writeFileTool as Tool,
     gitTool as Tool,

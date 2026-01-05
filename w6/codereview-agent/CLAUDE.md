@@ -47,6 +47,7 @@ codereview-agent/
 │   ├── agent.ts           # createCodeReviewAgent factory
 │   ├── cli.ts             # CLI entry point
 │   └── tools/
+│       ├── bash.ts        # Basic shell commands (read-only)
 │       ├── read-file.ts   # Read files in repo
 │       ├── write-file.ts  # Write review reports
 │       ├── git.ts         # Git commands (read-only)
