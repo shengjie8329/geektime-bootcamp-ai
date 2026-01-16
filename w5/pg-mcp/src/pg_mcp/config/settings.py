@@ -5,10 +5,19 @@ and type safety. Configuration is loaded from environment variables with
 sensible defaults.
 """
 
+from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load .env from project root
+# __file__ is: .../src/pg_mcp/config/settings.py
+# We need to go up 3 levels to reach project root
+_env_path = Path(__file__).parent.parent.parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path, override=True)
 
 
 class DatabaseConfig(BaseSettings):
@@ -49,6 +58,9 @@ class OpenAIConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPENAI_")
 
     api_key: SecretStr = Field(default=SecretStr(""), description="OpenAI API key")
+    base_url: str | None = Field(
+        default=None, description="OpenAI API base URL (uses default if not specified)"
+    )
     model: str = Field(default="gpt-4o-mini", description="Model to use for SQL generation")
     max_tokens: int = Field(default=2000, ge=100, le=4096, description="Maximum tokens in response")
     temperature: float = Field(
@@ -65,8 +77,10 @@ class OpenAIConfig(BaseSettings):
         api_key_str = v.get_secret_value()
         if not api_key_str or not api_key_str.strip():
             raise ValueError("OpenAI API key must not be empty")
-        if not api_key_str.startswith("sk-"):
-            raise ValueError("OpenAI API key must start with 'sk-'")
+        # Allow both OpenAI format (sk-*) and custom providers like GLM-4
+        # Just ensure it's long enough to be a valid key
+        if len(api_key_str) < 20:
+            raise ValueError("API key appears too short")
         return v
 
 
@@ -184,8 +198,6 @@ class Settings(BaseSettings):
     """Main application settings aggregating all config sections."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )

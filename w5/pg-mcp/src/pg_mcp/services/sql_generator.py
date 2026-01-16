@@ -7,13 +7,13 @@ natural language questions into valid PostgreSQL SQL queries.
 import re
 from typing import TYPE_CHECKING
 
-from openai import AsyncOpenAI
-
 from pg_mcp.config.settings import OpenAIConfig
+from pg_mcp.services.openai_client_manager import OpenAIClientManager
 from pg_mcp.models.errors import LLMError, LLMTimeoutError, LLMUnavailableError
 from pg_mcp.prompts.sql_generation import SQL_GENERATION_SYSTEM_PROMPT, build_user_prompt
 
 if TYPE_CHECKING:
+    from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletion
 
     from pg_mcp.models.schema import DatabaseSchema
@@ -42,7 +42,10 @@ class SQLGenerator:
             config: OpenAI configuration including API key and model settings.
         """
         self.config = config
-        self.client = AsyncOpenAI(api_key=config.api_key.get_secret_value(), timeout=config.timeout)
+        # Get shared client from manager to avoid multiple connections
+        manager = OpenAIClientManager.get_instance()
+        manager.configure(config)
+        self.client = manager.get_client()
 
     async def generate(
         self,

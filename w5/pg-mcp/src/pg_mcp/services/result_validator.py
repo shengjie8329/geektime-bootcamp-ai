@@ -7,9 +7,8 @@ whether query results correctly match the user's original question.
 import json
 from typing import TYPE_CHECKING, Any
 
-from openai import AsyncOpenAI
-
 from pg_mcp.config.settings import OpenAIConfig, ValidationConfig
+from pg_mcp.services.openai_client_manager import OpenAIClientManager
 from pg_mcp.models.errors import LLMError, LLMTimeoutError, LLMUnavailableError
 from pg_mcp.models.query import ResultValidationResult
 from pg_mcp.prompts.result_validation import (
@@ -18,6 +17,7 @@ from pg_mcp.prompts.result_validation import (
 )
 
 if TYPE_CHECKING:
+    from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletion
 
 
@@ -53,10 +53,10 @@ class ResultValidator:
         """
         self.openai_config = openai_config
         self.validation_config = validation_config
-        self.client = AsyncOpenAI(
-            api_key=openai_config.api_key.get_secret_value(),
-            timeout=validation_config.timeout_seconds,
-        )
+        # Get shared client from manager to avoid multiple connections
+        manager = OpenAIClientManager.get_instance()
+        manager.configure(openai_config)
+        self.client = manager.get_client()
 
     async def validate(
         self,

@@ -5,9 +5,20 @@ functionality as an MCP tool. It includes complete lifespan management for
 initializing and cleaning up all components.
 """
 
+import os
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+
+# Add src directory to sys.path to prioritize source code over cached packages
+_src_path = os.path.join(os.path.dirname(__file__), "pg_mcp")
+if _src_path not in sys.path:
+    sys.path.insert(0, _src_path)
+    logger = None  # Will be set after import
+
+from asyncpg import Pool
+from mcp.server.fastmcp import FastMCP
 
 from asyncpg import Pool
 from mcp.server.fastmcp import FastMCP
@@ -20,6 +31,7 @@ from pg_mcp.observability.logging import configure_logging, get_logger
 from pg_mcp.observability.metrics import MetricsCollector
 from pg_mcp.resilience.circuit_breaker import CircuitBreaker
 from pg_mcp.resilience.rate_limiter import MultiRateLimiter
+from pg_mcp.services.openai_client_manager import OpenAIClientManager
 from pg_mcp.services.orchestrator import QueryOrchestrator
 from pg_mcp.services.result_validator import ResultValidator
 from pg_mcp.services.sql_executor import SQLExecutor
@@ -218,6 +230,19 @@ async def lifespan(_app: FastMCP) -> AsyncIterator[None]:  # type: ignore[type-a
     finally:
         # Shutdown sequence
         logger.info("Starting PostgreSQL MCP Server shutdown...")
+
+        # Close OpenAI client connections
+        try:
+            import asyncio
+            await asyncio.wait_for(
+                OpenAIClientManager.reset(),
+                timeout=3.0
+            )
+            logger.info("OpenAI client connections closed")
+        except asyncio.TimeoutError:
+            logger.warning("OpenAI client close timed out")
+        except Exception as e:
+            logger.warning(f"Error closing OpenAI client connections: {e!s}")
 
         # Stop schema auto-refresh with timeout
         if _schema_cache is not None:
