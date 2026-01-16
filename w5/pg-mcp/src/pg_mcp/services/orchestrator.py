@@ -31,7 +31,9 @@ from pg_mcp.models.query import (
     ValidationResult,
 )
 from pg_mcp.resilience.circuit_breaker import CircuitBreaker
+from pg_mcp.resilience.rate_limiter import MultiRateLimiter
 from pg_mcp.services.result_validator import ResultValidator
+from pg_mcp.observability.metrics import MetricsCollector
 from pg_mcp.services.sql_executor import SQLExecutor
 from pg_mcp.services.sql_generator import SQLGenerator
 from pg_mcp.services.sql_validator import SQLValidator
@@ -101,6 +103,15 @@ class QueryOrchestrator:
             recovery_timeout=resilience_config.circuit_breaker_timeout,
         )
 
+        # Create rate limiter for concurrent request control
+        self.rate_limiter = MultiRateLimiter(
+            query_limit=10,  # TODO: Use config from settings
+            llm_limit=5,
+        )
+
+        # Create metrics collector for observability
+        self.metrics = MetricsCollector()
+
     async def execute_query(self, request: QueryRequest) -> QueryResponse:
         """Execute complete query flow from question to results.
 
@@ -134,105 +145,124 @@ class QueryOrchestrator:
         )
 
         try:
-            # Step 1: Resolve database name
-            database_name = self._resolve_database(request.database)
-            logger.debug(
-                "Resolved database",
-                extra={"request_id": request_id, "database": database_name},
+            # Increment query request metric
+            self.metrics.increment_query_request(
+                status="started",
+                database=request.database or "default"
             )
 
-            # Step 2: Get schema from cache
-            schema = self.schema_cache.get(database_name)
-            if schema is None:
-                # Schema not in cache, load it
-                pool = self.pools.get(database_name)
-                if pool is None:
-                    raise DatabaseError(
-                        message=f"No connection pool available for database '{database_name}'",
-                        details={"database": database_name},
-                    )
-                try:
-                    schema = await self.schema_cache.load(database_name, pool)
-                except Exception as e:
-                    raise SchemaLoadError(
-                        message=f"Failed to load schema for database '{database_name}': {e!s}",
-                        details={"database": database_name, "error": str(e)},
-                    ) from e
-
-            logger.debug(
-                "Schema loaded",
-                extra={
-                    "request_id": request_id,
-                    "database": database_name,
-                    "tables": len(schema.tables),
-                },
-            )
-
-            # Step 3: Generate and validate SQL with retry logic
-            generated_sql, validation_result, tokens_used = await self._generate_sql_with_retry(
-                question=request.question,
-                schema=schema,
-                request_id=request_id,
-            )
-
-            # Step 4: If return_type is SQL, return early
-            if request.return_type == ReturnType.SQL:
-                logger.info(
-                    "Returning SQL only",
-                    extra={"request_id": request_id, "sql_length": len(generated_sql)},
+            # Rate limiting for concurrent queries
+            async with self.rate_limiter.for_queries():
+                # Step 1: Resolve database name
+                database_name = self._resolve_database(request.database)
+                logger.debug(
+                    "Resolved database",
+                    extra={"request_id": request_id, "database": database_name},
                 )
+
+                # Step 2: Get schema from cache
+                schema = self.schema_cache.get(database_name)
+                if schema is None:
+                    # Schema not in cache, load it
+                    pool = self.pools.get(database_name)
+                    if pool is None:
+                        raise DatabaseError(
+                            message=f"No connection pool available for database '{database_name}'",
+                            details={"database": database_name},
+                        )
+                    try:
+                        schema = await self.schema_cache.load(database_name, pool)
+                    except Exception as e:
+                        raise SchemaLoadError(
+                            message=f"Failed to load schema for database '{database_name}': {e!s}",
+                            details={"database": database_name, "error": str(e)},
+                        ) from e
+
+                logger.debug(
+                    "Schema loaded",
+                    extra={
+                        "request_id": request_id,
+                        "database": database_name,
+                        "tables": len(schema.tables),
+                    },
+                )
+
+                # Step 3: Generate and validate SQL with retry logic
+                generated_sql, validation_result, tokens_used = await self._generate_sql_with_retry(
+                    question=request.question,
+                    schema=schema,
+                    request_id=request_id,
+                )
+
+                # Step 4: If return_type is SQL, return early
+                if request.return_type == ReturnType.SQL:
+                    logger.info(
+                        "Returning SQL only",
+                        extra={"request_id": request_id, "sql_length": len(generated_sql)},
+                    )
+                    self.metrics.increment_query_request(
+                        status="success",
+                        database=database_name
+                    )
+                    return QueryResponse(
+                        success=True,
+                        generated_sql=generated_sql,
+                        validation=validation_result,
+                        data=None,
+                        error=None,
+                        confidence=100,
+                        tokens_used=tokens_used,
+                    )
+
+                # Step 5: Execute SQL
+                logger.debug("Executing SQL", extra={"request_id": request_id})
+                start_time = self._get_current_time_ms()
+
+                results, total_count = await self.sql_executor.execute(generated_sql)
+
+                execution_time_ms = self._get_current_time_ms() - start_time
+                logger.info(
+                    "SQL executed successfully",
+                    extra={
+                        "request_id": request_id,
+                        "row_count": total_count,
+                        "execution_time_ms": execution_time_ms,
+                    },
+                )
+
+                # Step 6: Validate results (non-blocking, failures don't fail the request)
+                result_confidence = await self._validate_results_safely(
+                    question=request.question,
+                    sql=generated_sql,
+                    results=results,
+                    row_count=total_count,
+                    request_id=request_id,
+                )
+
+                # Step 7: Build successful response
+                query_result = QueryResult(
+                    columns=list(results[0].keys()) if results else [],
+                    rows=results,
+                    row_count=len(results),  # Limited row count (after max_rows applied)
+                    execution_time_ms=execution_time_ms,
+                )
+
+                # Record database query duration metric
+                self.metrics.observe_db_query_duration(execution_time_ms / 1000.0)
+                self.metrics.increment_query_request(
+                    status="success",
+                    database=database_name
+                )
+
                 return QueryResponse(
                     success=True,
                     generated_sql=generated_sql,
                     validation=validation_result,
-                    data=None,
+                    data=query_result,
                     error=None,
-                    confidence=100,
+                    confidence=result_confidence,
                     tokens_used=tokens_used,
                 )
-
-            # Step 5: Execute SQL
-            logger.debug("Executing SQL", extra={"request_id": request_id})
-            start_time = self._get_current_time_ms()
-
-            results, total_count = await self.sql_executor.execute(generated_sql)
-
-            execution_time_ms = self._get_current_time_ms() - start_time
-            logger.info(
-                "SQL executed successfully",
-                extra={
-                    "request_id": request_id,
-                    "row_count": total_count,
-                    "execution_time_ms": execution_time_ms,
-                },
-            )
-
-            # Step 6: Validate results (non-blocking, failures don't fail the request)
-            result_confidence = await self._validate_results_safely(
-                question=request.question,
-                sql=generated_sql,
-                results=results,
-                row_count=total_count,
-                request_id=request_id,
-            )
-
-            # Step 7: Build successful response
-            query_result = QueryResult(
-                columns=list(results[0].keys()) if results else [],
-                rows=results,
-                row_count=len(results),  # Limited row count (after max_rows applied)
-                execution_time_ms=execution_time_ms,
-            )
-
-            return QueryResponse(
-                success=True,
-                generated_sql=generated_sql,
-                validation=validation_result,
-                data=query_result,
-                error=None,
-                confidence=result_confidence,
-                tokens_used=tokens_used,
-            )
 
         except PgMcpError as e:
             # Handle known application errors
@@ -385,29 +415,35 @@ class QueryOrchestrator:
                     },
                 )
 
-                # Generate SQL
-                generated_sql = await self.sql_generator.generate(
-                    question=question,
-                    schema=schema,
-                    previous_attempt=previous_sql,
-                    error_feedback=error_feedback,
-                )
+                # Rate limiting for LLM calls
+                async with self.rate_limiter.for_llm():
+                    # Generate SQL
+                    generated_sql = await self.sql_generator.generate(
+                        question=question,
+                        schema=schema,
+                        previous_attempt=previous_sql,
+                        error_feedback=error_feedback,
+                    )
 
-                # Note: tokens_used would come from OpenAI response metadata if available
-                # For now, we don't extract it, but it can be added later
+                    # Record LLM call metric
+                    self.metrics.increment_llm_call(operation="generate_sql")
 
-                logger.debug(
-                    "SQL generated",
-                    extra={
-                        "request_id": request_id,
-                        "sql_length": len(generated_sql),
-                    },
-                )
+                    # Note: tokens_used would come from OpenAI response metadata if available
+                    # For now, we don't extract it, but it can be added later
+
+                    logger.debug(
+                        "SQL generated",
+                        extra={
+                            "request_id": request_id,
+                            "sql_length": len(generated_sql),
+                        },
+                    )
 
                 # Validate SQL
                 try:
                     self.sql_validator.validate_or_raise(generated_sql)
                 except (SecurityViolationError, SQLParseError) as validation_error:
+                    self.metrics.increment_sql_rejected(reason=str(validation_error))
                     if attempt < max_retries:
                         # Record as failure and retry with feedback
                         logger.warning(
@@ -418,6 +454,17 @@ class QueryOrchestrator:
                                 "error": str(validation_error),
                             },
                         )
+                        # Calculate exponential backoff delay
+                        delay = self.resilience_config.retry_delay * (
+                            self.resilience_config.backoff_factor ** attempt
+                        )
+                        logger.debug(
+                            f"Waiting {delay:.2f}s before retry",
+                            extra={"request_id": request_id, "attempt": attempt + 1},
+                        )
+                        import asyncio
+                        await asyncio.sleep(delay)
+
                         previous_sql = generated_sql
                         error_feedback = str(validation_error)
                         continue

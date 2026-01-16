@@ -20,11 +20,8 @@ if _src_path not in sys.path:
 from asyncpg import Pool
 from mcp.server.fastmcp import FastMCP
 
-from asyncpg import Pool
-from mcp.server.fastmcp import FastMCP
-
 from pg_mcp.cache.schema_cache import SchemaCache
-from pg_mcp.config.settings import Settings
+from pg_mcp.config.settings import Settings, AccessControlConfig
 from pg_mcp.db.pool import close_pools, create_pool
 from pg_mcp.models.query import QueryRequest, QueryResponse, ReturnType
 from pg_mcp.observability.logging import configure_logging, get_logger
@@ -164,9 +161,9 @@ async def lifespan(_app: FastMCP) -> AsyncIterator[None]:  # type: ignore[type-a
         # SQL Validator
         sql_validator = SQLValidator(
             config=_settings.security,
-            blocked_tables=None,  # Can be configured via settings if needed
-            blocked_columns=None,  # Can be configured via settings if needed
-            allow_explain=False,
+            blocked_tables=_settings.access_control.blocked_tables,
+            blocked_columns=_settings.access_control.blocked_columns,
+            allow_explain=_settings.access_control.allow_explain,
         )
 
         # SQL Executor (create one per database)

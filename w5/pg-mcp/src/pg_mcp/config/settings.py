@@ -41,15 +41,58 @@ class DatabaseConfig(BaseSettings):
         default=30.0, ge=1.0, le=300.0, description="Command execution timeout in seconds"
     )
 
-    @property
-    def dsn(self) -> str:
-        """Build PostgreSQL DSN connection string."""
-        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.name}"
 
-    @property
-    def safe_dsn(self) -> str:
-        """Build DSN with masked password for logging."""
-        return f"postgresql://{self.user}:***@{self.host}:{self.port}/{self.name}"
+class MultiDatabaseConfig(BaseSettings):
+    """Multiple databases configuration for multi-database support.
+
+    This config allows defining multiple databases with their individual settings.
+    Each database can have its own connection parameters.
+    """
+
+    model_config = SettingsConfigDict(
+        case_sensitive=False,
+        env_prefix="DATABASES_",
+    )
+
+    # TODO: Implement multi-database configuration loading from environment or config file
+    # This is a placeholder for future enhancement
+    databases: list[DatabaseConfig] = Field(
+        default_factory=list,
+        description="List of database configurations",
+    )
+
+
+class AccessControlConfig(BaseSettings):
+    """Access control configuration for tables and columns.
+
+    This config defines which tables and columns should be blocked
+    from being accessed in queries.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ACCESS_CONTROL_")
+
+    blocked_tables_file: str | None = Field(
+        default=None,
+        description="Path to JSON file containing blocked tables configuration",
+    )
+    blocked_columns_file: str | None = Field(
+        default=None,
+        description="Path to JSON file containing blocked columns configuration",
+    )
+    allow_explain: bool = Field(
+        default=True,
+        description="Allow EXPLAIN statements for query debugging",
+    )
+
+    # Inline fallback lists (used if files not provided)
+    blocked_tables: list[str] = Field(
+        default_factory=list,
+        description="Fallback list of blocked table names",
+    )
+    blocked_columns: list[str] = Field(
+        default_factory=list,
+        description="Fallback list of blocked column names",
+    )
 
 
 class OpenAIConfig(BaseSettings):
@@ -208,6 +251,8 @@ class Settings(BaseSettings):
 
     # Nested configurations
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    multi_database: MultiDatabaseConfig = Field(default_factory=MultiDatabaseConfig)
+    access_control: AccessControlConfig = Field(default_factory=AccessControlConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     validation: ValidationConfig = Field(default_factory=ValidationConfig)
